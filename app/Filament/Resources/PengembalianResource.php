@@ -11,12 +11,13 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Auth;
 
 class PengembalianResource extends Resource
 {
     protected static ?string $model = Pengembalian::class;
 
-    protected static ?string $navigationIcon = 'grommet-transaction';
+    protected static ?string $navigationIcon = 'heroicon-o-arrow-uturn-left';
     
     protected static ?string $navigationLabel = 'Pengembalian';
 
@@ -38,15 +39,18 @@ class PengembalianResource extends Resource
                             ->searchable()
                             ->preload()
                             ->getOptionLabelFromRecordUsing(function (Model $record) {
-                                return "#{$record->id} - " . ($record->user?->name ?? $record->borrower_name) . " - " . ($record->inventoriBuku?->title ?? 'N/A');
+                                return "#{$record->id} - " . ($record->user?->name ?? 'N/A') . " - " . ($record->inventoriBuku?->title ?? 'N/A');
                             })
                             ->helperText('Pilih peminjaman yang buku-nya akan dikembalikan')
                             ->searchPrompt('Cari berdasarkan nama peminjam atau judul buku...')
                             ->placeholder('Pilih peminjaman...')
+                            ->disabled(fn (string $operation) => $operation === 'edit')
                             ->afterStateUpdated(function ($state, callable $set) {
                                 if ($state) {
                                     $peminjaman = \App\Models\Peminjaman::with(['user', 'inventoriBuku'])->find($state);
                                     if ($peminjaman) {
+                                        $set('user_id', $peminjaman->user_id);
+                                        $set('inventori_buku_id', $peminjaman->inventori_buku_id);
                                         $set('return_date', now()->format('Y-m-d'));
                                     }
                                 }
@@ -61,7 +65,8 @@ class PengembalianResource extends Resource
                             ->label('Tanggal Pengembalian')
                             ->default(now())
                             ->helperText('Tanggal buku dikembalikan')
-                            ->prefixIcon('heroicon-o-calendar'),
+                            ->prefixIcon('heroicon-o-calendar')
+                            ->disabled(fn (string $operation) => $operation === 'edit'),
                         Forms\Components\Select::make('condition')
                             ->options([
                                 'good' => 'Baik',
@@ -74,13 +79,10 @@ class PengembalianResource extends Resource
                             ->default('good')
                             ->helperText('Kondisi buku saat dikembalikan')
                             ->prefixIcon('heroicon-o-book-open'),
-                        Forms\Components\Select::make('late_days')
+                        Forms\Components\TextInput::make('late_days')
                             ->label('Keterlambatan (Hari)')
                             ->disabled()
-                            ->helperText('Jumlah hari keterlambatan (jika ada)')
-                            ->afterStateHydrated(function ($component, $state) {
-                                // This will be calculated automatically based on due_date
-                            }),
+                            ->helperText('Jumlah hari keterlambatan (jika ada)'),
                     ])
                     ->columns(3),
 
@@ -101,20 +103,40 @@ class PengembalianResource extends Resource
                             ->rows(4)
                             ->helperText('Catatan atau informasi tambahan tentang pengembalian')
                             ->columnSpan('full'),
-                        Forms\Components\Grid::make(2)
-                            ->schema([
-                                Forms\Components\TextInput::make('received_by')
-                                    ->label('Diterima Oleh')
-                                    ->placeholder('Nama petugas yang menerima')
-                                    ->maxLength(255)
-                                    ->helperText('Nama petugas perpustakaan'),
-                                Forms\Components\TextInput::make('checked_by')
-                                    ->label('Diperiksa Oleh')
-                                    ->placeholder('Nama petugas yang memeriksa')
-                                    ->maxLength(255)
-                                    ->helperText('Nama petugas yang memeriksa kondisi buku'),
-                            ]),
-                    ]),
+                    ])
+                    ->columns(1),
+
+                Forms\Components\Section::make('Status Konfirmasi')
+                    ->description('Status verifikasi oleh staff')
+                    ->schema([
+                        Forms\Components\Select::make('confirmation_status')
+                            ->options([
+                                'pending' => 'Menunggu Konfirmasi',
+                                'approved' => 'Dikonfirmasi',
+                                'rejected' => 'Ditolak',
+                            ])
+                            ->required()
+                            ->default('pending')
+                            ->disabled(),
+                    ])
+                    ->columns(1),
+
+                Forms\Components\Section::make('Konfirmasi Staff')
+                    ->description('Informasi konfirmasi dari staff')
+                    ->visible(fn ($record) => $record && $record->confirmation_status !== 'pending')
+                    ->schema([
+                        Forms\Components\TextInput::make('confirmer.name')
+                            ->label('Dikonfirmasi Oleh')
+                            ->disabled(),
+                        Forms\Components\DateTime::make('confirmed_at')
+                            ->label('Tanggal Konfirmasi')
+                            ->disabled(),
+                        Forms\Components\Textarea::make('confirmed_notes')
+                            ->label('Catatan Konfirmasi')
+                            ->disabled()
+                            ->rows(3),
+                    ])
+                    ->columns(1),
             ]);
     }
 
@@ -132,11 +154,10 @@ class PengembalianResource extends Resource
                     ->sortable()
                     ->alignCenter()
                     ->tooltip('ID Peminjaman'),
-                Tables\Columns\TextColumn::make('peminjaman.user.name')
+                Tables\Columns\TextColumn::make('user.name')
                     ->label('Peminjam')
                     ->searchable()
-                    ->sortable()
-                    ->formatStateUsing(fn ($state, $record) => $state ?? $record->peminjaman?->borrower_name),
+                    ->sortable(),
                 Tables\Columns\TextColumn::make('peminjaman.inventoriBuku.title')
                     ->label('Judul Buku')
                     ->searchable()
@@ -170,9 +191,22 @@ class PengembalianResource extends Resource
                     ->label('Denda')
                     ->money('IDR')
                     ->sortable()
-                    ->formatStateUsing(fn ($state) => $state > 0 ? $state : '-'),
+                    ->formatStateUsing(fn ($state) => $state > 0 ? number_format($state, 0, ',', '.') : '-'),
+                Tables\Columns\TextColumn::make('confirmation_status')
+                    ->label('Konfirmasi')
+                    ->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'pending' => 'warning',
+                        'approved' => 'success',
+                        'rejected' => 'danger',
+                    })
+                    ->formatStateUsing(fn (string $state): string => match ($state) {
+                        'pending' => 'Menunggu',
+                        'approved' => 'Dikonfirmasi',
+                        'rejected' => 'Ditolak',
+                    }),
                 Tables\Columns\TextColumn::make('created_at')
-                    ->label('Tanggal Dibuat')
+                    ->label('Diajukan')
                     ->dateTime('d/m/Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
@@ -186,6 +220,13 @@ class PengembalianResource extends Resource
                         'damaged_heavy' => 'Rusak Berat',
                         'lost' => 'Hilang',
                     ]),
+                Tables\Filters\SelectFilter::make('confirmation_status')
+                    ->label('Konfirmasi')
+                    ->options([
+                        'pending' => 'Menunggu',
+                        'approved' => 'Dikonfirmasi',
+                        'rejected' => 'Ditolak',
+                    ]),
                 Tables\Filters\Filter::make('late')
                     ->label('Terlambat')
                     ->query(fn ($query) => $query->whereHas('peminjaman', function ($q) {
@@ -195,8 +236,40 @@ class PengembalianResource extends Resource
             ])
             ->actions([
                 Tables\Actions\ViewAction::make(),
-                Tables\Actions\EditAction::make(),
-                Tables\Actions\DeleteAction::make(),
+                Tables\Actions\Action::make('confirm')
+                    ->label('Konfirmasi')
+                    ->icon('heroicon-o-check-badge')
+                    ->color('success')
+                    ->visible(fn ($record) => $record->confirmation_status === 'pending')
+                    ->requiresConfirmation()
+                    ->modalHeading('Konfirmasi Pengembalian')
+                    ->modalDescription('Apakah Anda yakin ingin mengkonfirmasi pengembalian ini? Stok buku akan dikembalikan.')
+                    ->form([
+                        Forms\Components\Textarea::make('confirmed_notes')
+                            ->label('Catatan')
+                            ->placeholder('Tambahkan catatan jika diperlukan...')
+                            ->rows(3),
+                    ])
+                    ->action(function ($record, $data) {
+                        $record->update([
+                            'confirmation_status' => 'approved',
+                            'confirmed_by' => Auth::id(),
+                            'confirmed_at' => now(),
+                            'confirmed_notes' => $data['confirmed_notes'] ?? null,
+                        ]);
+                        
+                        // Tambah kembali stok buku
+                        $book = $record->inventoriBuku;
+                        if ($book) {
+                            $book->increment('quantity');
+                        }
+                        
+                        // Update status peminjaman
+                        $record->peminjaman->update([
+                            'status' => 'returned',
+                            'return_date' => $record->return_date,
+                        ]);
+                    }),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([

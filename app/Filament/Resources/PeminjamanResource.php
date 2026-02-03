@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\PeminjamanResource\Pages;
 use App\Filament\Resources\PeminjamanResource\RelationManagers;
+use App\Models\InventoriBuku;
 use App\Models\Peminjaman;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -11,12 +12,13 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Auth;
 
 class PeminjamanResource extends Resource
 {
     protected static ?string $model = Peminjaman::class;
 
-    protected static ?string $navigationIcon = 'grommet-transaction';
+    protected static ?string $navigationIcon = 'heroicon-o-book-open';
     
     protected static ?string $navigationLabel = 'Peminjaman';
 
@@ -50,7 +52,8 @@ class PeminjamanResource extends Resource
                             ->getOptionLabelFromRecordUsing(fn (Model $record) => "{$record->title} - {$record->author} (Stok: {$record->quantity})")
                             ->helperText('Pilih buku yang akan dipinjamkan')
                             ->searchPrompt('Cari berdasarkan judul atau pengarang...')
-                            ->placeholder('Pilih buku...'),
+                            ->placeholder('Pilih buku...')
+                            ->disabled(fn (string $operation) => $operation === 'edit'),
                     ])
                     ->columns(2),
 
@@ -62,21 +65,24 @@ class PeminjamanResource extends Resource
                             ->label('Tanggal Pinjam')
                             ->default(now())
                             ->helperText('Tanggal buku dipinjam')
-                            ->prefixIcon('heroicon-o-calendar'),
+                            ->prefixIcon('heroicon-o-calendar')
+                            ->disabled(fn (string $operation) => $operation === 'edit'),
                         Forms\Components\DatePicker::make('due_date')
                             ->required()
                             ->label('Tanggal Jatuh Tempo')
                             ->helperText('Tanggal maksimal buku harus dikembalikan')
-                            ->prefixIcon('heroicon-o-clock'),
+                            ->prefixIcon('heroicon-o-clock')
+                            ->disabled(fn (string $operation) => $operation === 'edit'),
                         Forms\Components\DatePicker::make('return_date')
                             ->label('Tanggal Pengembalian')
                             ->helperText('Diisi saat buku dikembalikan (kosong jika belum dikembalikan)')
-                            ->prefixIcon('heroicon-o-check-circle'),
+                            ->prefixIcon('heroicon-o-check-circle')
+                            ->disabled(fn (string $operation) => $operation === 'edit'),
                     ])
                     ->columns(3),
 
-                Forms\Components\Section::make('Status & Catatan')
-                    ->description('Status peminjaman dan catatan tambahan')
+                Forms\Components\Section::make('Status Peminjaman')
+                    ->description('Status dan konfirmasi peminjaman')
                     ->schema([
                         Forms\Components\Select::make('status')
                             ->options([
@@ -88,29 +94,46 @@ class PeminjamanResource extends Resource
                             ->required()
                             ->label('Status')
                             ->default('borrowed')
-                            ->helperText('Status peminjaman buku')
-                            ->prefixIcon('heroicon-o-flag'),
+                            ->helperText('Status peminjaman buku'),
+                        Forms\Components\Select::make('confirmation_status')
+                            ->options([
+                                'pending' => 'Menunggu Konfirmasi',
+                                'approved' => 'Disetujui',
+                                'rejected' => 'Ditolak',
+                            ])
+                            ->required()
+                            ->label('Status Konfirmasi')
+                            ->default('pending')
+                            ->disabled()
+                            ->helperText('Status verifikasi oleh staff'),
+                    ])
+                    ->columns(2),
+
+                Forms\Components\Section::make('Konfirmasi Staff')
+                    ->description('Informasi konfirmasi dari staff')
+                    ->visible(fn ($record) => $record && $record->confirmation_status !== 'pending')
+                    ->schema([
+                        Forms\Components\TextInput::make('confirmer.name')
+                            ->label('Dikonfirmasi Oleh')
+                            ->disabled(),
+                        Forms\Components\DateTime::make('confirmed_at')
+                            ->label('Tanggal Konfirmasi')
+                            ->disabled(),
+                        Forms\Components\Textarea::make('confirmed_notes')
+                            ->label('Catatan Konfirmasi')
+                            ->disabled()
+                            ->rows(3),
+                    ])
+                    ->columns(1),
+
+                Forms\Components\Section::make('Catatan')
+                    ->schema([
                         Forms\Components\Textarea::make('notes')
                             ->label('Catatan')
                             ->placeholder('Tambahkan catatan jika diperlukan...')
                             ->maxLength(1000)
                             ->rows(3)
-                            ->helperText('Catatan atau informasi tambahan tentang peminjaman')
                             ->columnSpan('full'),
-                        Forms\Components\Grid::make(2)
-                            ->schema([
-                                Forms\Components\TextInput::make('borrower_name')
-                                    ->label('Nama Peminjam (Jika bukan anggota)')
-                                    ->placeholder('Nama lengkap peminjam')
-                                    ->maxLength(255)
-                                    ->helperText('Diisi jika peminjam bukan anggota perpustakaan'),
-                                Forms\Components\TextInput::make('borrower_phone')
-                                    ->label('No. HP Peminjam')
-                                    ->placeholder('081234567890')
-                                    ->tel()
-                                    ->maxLength(20)
-                                    ->helperText('Nomor HP yang dapat dihubungi'),
-                            ]),
                     ]),
             ]);
     }
@@ -128,19 +151,13 @@ class PeminjamanResource extends Resource
                     ->label('Peminjam')
                     ->searchable()
                     ->sortable()
-                    ->formatStateUsing(fn ($state, $record) => $state ?? $record->borrower_name)
-                    ->tooltip(fn ($record) => $record->user?->email ?? $record->borrower_phone),
+                    ->formatStateUsing(fn ($state, $record) => $state ?? '-')
+                    ->tooltip(fn ($record) => $record->user?->email),
                 Tables\Columns\TextColumn::make('inventoriBuku.title')
                     ->label('Judul Buku')
                     ->searchable()
                     ->sortable()
-                    ->wrap()
-                    ->formatStateUsing(fn ($state, $record) => $state ?? 'N/A'),
-                Tables\Columns\TextColumn::make('inventoriBuku.isbn')
-                    ->label('ISBN')
-                    ->searchable()
-                    ->fontFamily('mono')
-                    ->toggleable(),
+                    ->wrap(),
                 Tables\Columns\TextColumn::make('borrow_date')
                     ->label('Tgl Pinjam')
                     ->date('d/m/Y')
@@ -148,12 +165,8 @@ class PeminjamanResource extends Resource
                 Tables\Columns\TextColumn::make('due_date')
                     ->label('Jatuh Tempo')
                     ->date('d/m/Y')
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('return_date')
-                    ->label('Tgl Kembali')
-                    ->date('d/m/Y')
                     ->sortable()
-                    ->placeholder('-'),
+                    ->color(fn ($record) => $record->isOverdue() ? 'danger' : null),
                 Tables\Columns\TextColumn::make('status')
                     ->label('Status')
                     ->badge()
@@ -169,8 +182,21 @@ class PeminjamanResource extends Resource
                         'overdue' => 'Terlambat',
                         'lost' => 'Hilang',
                     }),
+                Tables\Columns\TextColumn::make('confirmation_status')
+                    ->label('Konfirmasi')
+                    ->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'pending' => 'warning',
+                        'approved' => 'success',
+                        'rejected' => 'danger',
+                    })
+                    ->formatStateUsing(fn (string $state): string => match ($state) {
+                        'pending' => 'Menunggu',
+                        'approved' => 'Disetujui',
+                        'rejected' => 'Ditolak',
+                    }),
                 Tables\Columns\TextColumn::make('created_at')
-                    ->label('Tanggal Dibuat')
+                    ->label('Diajukan')
                     ->dateTime('d/m/Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
@@ -184,6 +210,13 @@ class PeminjamanResource extends Resource
                         'overdue' => 'Terlambat',
                         'lost' => 'Hilang',
                     ]),
+                Tables\Filters\SelectFilter::make('confirmation_status')
+                    ->label('Konfirmasi')
+                    ->options([
+                        'pending' => 'Menunggu',
+                        'approved' => 'Disetujui',
+                        'rejected' => 'Ditolak',
+                    ]),
                 Tables\Filters\SelectFilter::make('inventoriBuku')
                     ->label('Buku')
                     ->relationship('inventoriBuku', 'title')
@@ -192,8 +225,62 @@ class PeminjamanResource extends Resource
             ])
             ->actions([
                 Tables\Actions\ViewAction::make(),
-                Tables\Actions\EditAction::make(),
-                Tables\Actions\DeleteAction::make(),
+                Tables\Actions\ActionGroup::make([
+                    Tables\Actions\Action::make('approve')
+                        ->label('Setujui')
+                        ->icon('heroicon-o-check')
+                        ->color('success')
+                        ->visible(fn ($record) => $record->confirmation_status === 'pending')
+                        ->requiresConfirmation()
+                        ->modalHeading('Konfirmasi Peminjaman')
+                        ->modalDescription('Apakah Anda yakin ingin menyetujui peminjaman ini? Stok buku akan dikurangi.')
+                        ->form([
+                            Forms\Components\Textarea::make('confirmed_notes')
+                                ->label('Catatan')
+                                ->placeholder('Tambahkan catatan jika diperlukan...')
+                                ->rows(3),
+                        ])
+                        ->action(function ($record, $data) {
+                            $record->update([
+                                'confirmation_status' => 'approved',
+                                'confirmed_by' => Auth::id(),
+                                'confirmed_at' => now(),
+                                'confirmed_notes' => $data['confirmed_notes'] ?? null,
+                            ]);
+                            
+                            // Kurangi stok buku
+                            $book = $record->inventoriBuku;
+                            if ($book && $book->quantity > 0) {
+                                $book->decrement('quantity');
+                            }
+                        }),
+                    Tables\Actions\Action::make('reject')
+                        ->label('Tolak')
+                        ->icon('heroicon-o-x-mark')
+                        ->color('danger')
+                        ->visible(fn ($record) => $record->confirmation_status === 'pending')
+                        ->requiresConfirmation()
+                        ->modalHeading('Tolak Peminjaman')
+                        ->modalDescription('Apakah Anda yakin ingin menolak peminjaman ini?')
+                        ->form([
+                            Forms\Components\Textarea::make('confirmed_notes')
+                                ->label('Alasan Penolakan')
+                                ->required()
+                                ->placeholder('Jelaskan alasan penolakan...')
+                                ->rows(3),
+                        ])
+                        ->action(function ($record, $data) {
+                            $record->update([
+                                'confirmation_status' => 'rejected',
+                                'confirmed_by' => Auth::id(),
+                                'confirmed_at' => now(),
+                                'confirmed_notes' => $data['confirmed_notes'],
+                            ]);
+                        }),
+                ])
+                ->label('Aksi Konfirmasi')
+                ->icon('heroicon-o-cog')
+                ->color('primary'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([

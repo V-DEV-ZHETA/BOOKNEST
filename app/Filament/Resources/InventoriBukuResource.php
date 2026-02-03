@@ -86,24 +86,6 @@ class InventoriBukuResource extends Resource
                                     ->numeric()
                                     ->maxLength(4)
                                     ->helperText('Tahun buku diterbitkan'),
-                                Forms\Components\TextInput::make('edition')
-                                    ->label('Edisi')
-                                    ->placeholder('Cetakan 1')
-                                    ->maxLength(50)
-                                    ->helperText('Edisi atau cetakan buku'),
-                            ]),
-                        Forms\Components\Grid::make(2)
-                            ->schema([
-                                Forms\Components\TextInput::make('language')
-                                    ->label('Bahasa')
-                                    ->placeholder('Indonesia')
-                                    ->maxLength(50)
-                                    ->helperText('Bahasa yang digunakan dalam buku'),
-                                Forms\Components\TextInput::make('pages')
-                                    ->label('Jumlah Halaman')
-                                    ->placeholder('250')
-                                    ->numeric()
-                                    ->helperText('Total halaman buku'),
                             ]),
                         Forms\Components\Grid::make(2)
                             ->schema([
